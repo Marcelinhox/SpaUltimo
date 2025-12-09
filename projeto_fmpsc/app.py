@@ -585,22 +585,31 @@ def api_grafico():
 
     # função auxiliar: gerar figura de contagem por 'coluna'
     def fig_from_df(df, title_suffix=""):
-        # Lógica para gráfico empilhado
+        # Lógica para gráfico empilhado com múltiplos filtros
         if filtros and tipo == "bar":
             filter_cols = [f_col for f_col in filtros.keys() if f_col in df.columns]
-            if filter_cols:
-                # Cria uma coluna de combinação para o empilhamento
-                df['stack_col'] = df[filter_cols].astype(str).agg(' - '.join, axis=1)
 
-                counts = df.groupby([coluna, 'stack_col']).size().reset_index(name='total')
+            if len(filter_cols) > 0:
+                color_col = filter_cols[0]
+                pattern_col = filter_cols[1] if len(filter_cols) > 1 else None
 
+                # Agrupamento para contagem
+                grouping_cols = [coluna, color_col]
+                if pattern_col:
+                    grouping_cols.append(pattern_col)
+
+                counts = df.groupby(grouping_cols).size().reset_index(name='total')
+
+                # Montar título
                 title = f"'{coluna}' com filtros: {', '.join(filter_cols)} {title_suffix}"
 
+                # Gerar gráfico
                 fig = px.bar(
                     counts,
                     x=coluna,
                     y='total',
-                    color='stack_col',
+                    color=color_col,
+                    pattern_shape=pattern_col,
                     barmode='stack',
                     text='total',
                     title=title
