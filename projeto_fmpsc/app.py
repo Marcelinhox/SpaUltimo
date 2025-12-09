@@ -191,7 +191,7 @@ def cadastro():
 
 
 
-        
+
         if not padrao_cpf.match(cpf):
             return respond_errors_or_flash(
                 ['Digite o CPF no formato 000.000.000-00.'],
@@ -585,6 +585,30 @@ def api_grafico():
 
     # função auxiliar: gerar figura de contagem por 'coluna'
     def fig_from_df(df, title_suffix=""):
+        # Lógica para gráfico empilhado
+        if filtros and tipo == "bar":
+            filter_cols = [f_col for f_col in filtros.keys() if f_col in df.columns]
+            if filter_cols:
+                # Cria uma coluna de combinação para o empilhamento
+                df['stack_col'] = df[filter_cols].astype(str).agg(' - '.join, axis=1)
+
+                counts = df.groupby([coluna, 'stack_col']).size().reset_index(name='total')
+
+                title = f"'{coluna}' com filtros: {', '.join(filter_cols)} {title_suffix}"
+
+                fig = px.bar(
+                    counts,
+                    x=coluna,
+                    y='total',
+                    color='stack_col',
+                    barmode='stack',
+                    text='total',
+                    title=title
+                )
+                fig.update_traces(textposition="inside")
+                return fig
+
+        # Lógica original para outros tipos de gráfico
         ser = df[coluna].fillna("N/A").astype(str)
         counts = ser.value_counts().reset_index()
         counts.columns = ["categoria", "total"]
@@ -595,11 +619,10 @@ def api_grafico():
                 counts,
                 x="categoria",
                 y="total",
-                text="total",   # <<< mostra número na barra
+                text="total",
                 title=f"{coluna} {title_suffix}"
             )
             fig.update_traces(textposition="outside")
-
         elif tipo == "pie":
             fig = px.pie(
                 counts,
@@ -608,25 +631,22 @@ def api_grafico():
                 title=f"{coluna} {title_suffix}",
                 hole=0
             )
-            fig.update_traces(textinfo='label+percent+value')  # <<< mostra valores
-
+            fig.update_traces(textinfo='label+percent+value')
         elif tipo == "line":
             fig = px.line(
                 counts,
                 x="categoria",
                 y="total",
-                text="total",   # <<< mostra número
+                text="total",
                 title=f"{coluna} {title_suffix}"
             )
             fig.update_traces(textposition="top center")
-
         elif tipo == "histogram":
             fig = px.histogram(df, x=coluna, title=f"{coluna} {title_suffix}")
-
         else:
             fig = px.bar(counts, x="categoria", y="total", title=f"{coluna} {title_suffix}")
-
         return fig
+
     if tipo == "texto":
         # ----------------------------
         # RELATÓRIO POR EXTENSO BONITO
