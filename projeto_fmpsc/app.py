@@ -191,7 +191,7 @@ def cadastro():
 
 
 
-        
+
         if not padrao_cpf.match(cpf):
             return respond_errors_or_flash(
                 ['Digite o CPF no formato 000.000.000-00.'],
@@ -583,8 +583,122 @@ def api_grafico():
 
     # ---------------- MODO GRÁFICO A PARTIR DAQUI ----------------
 
+    def wrap_labels(val, length=20):
+        """Adiciona <br> em textos longos para quebra de linha no gráfico."""
+        if not isinstance(val, str) or len(val) <= length:
+            return val
+
+        # Quebra a string em palavras e reconstrói as linhas
+        words = val.split(' ')
+        lines = []
+        current_line = ""
+
+        for word in words:
+            if len(current_line + ' ' + word) > length:
+                lines.append(current_line)
+                current_line = word
+            else:
+                current_line += (' ' + word) if current_line else word
+
+        lines.append(current_line)
+        return '<br>'.join(lines)
+
     # função auxiliar: gerar figura de contagem por 'coluna'
     def fig_from_df(df, title_suffix=""):
+        df[coluna] = df[coluna].apply(wrap_labels)
+
+        # Lógica para gráfico empilhado com múltiplos filtros
+        if filtros and tipo == "bar":
+            filter_cols = [f_col for f_col in filtros.keys() if f_col in df.columns]
+
+            if len(filter_cols) > 0:
+                color_col = filter_cols[0]
+                pattern_col = filter_cols[1] if len(filter_cols) > 1 else None
+
+                # Agrupamento para contagem
+                grouping_cols = [coluna, color_col]
+                if pattern_col:
+                    grouping_cols.append(pattern_col)
+
+                counts = df.groupby(grouping_cols).size().reset_index(name='total')
+
+                # Montar título
+                title = f"'{coluna}' com filtros: {', '.join(filter_cols)} {title_suffix}"
+
+                # Gerar gráfico
+                fig = px.bar(
+                    counts,
+                    x=coluna,
+                    y='total',
+                    color=color_col,
+                    pattern_shape=pattern_col,
+                    barmode='stack',
+                    text='total',
+                    title=title
+                )
+                fig.update_traces(textposition="inside")
+                return fig
+
+        # Lógica para outros tipos de gráficos com múltiplos filtros
+        filter_cols = [f_col for f_col in (filtros or {}).keys() if f_col in df.columns and df[f_col].nunique() > 1]
+
+        # Sunburst para Gráfico de Pizza com múltiplos filtros
+        if tipo == "pie" and len(filter_cols) > 0:
+            path = [coluna] + filter_cols
+            counts = df.groupby(path).size().reset_index(name='total')
+            title = f"'{coluna}' com filtros: {', '.join(filter_cols)} {title_suffix}"
+
+            fig = px.sunburst(
+                counts,
+                path=path,
+                values='total',
+                title=title
+            )
+            fig.update_traces(textinfo='label+percent entry')
+            return fig
+
+        # Gráfico de Linha com múltiplos filtros
+        if tipo == "line" and len(filter_cols) > 0:
+            color_col = filter_cols[0]
+            style_col = filter_cols[1] if len(filter_cols) > 1 else None
+
+            grouping_cols = [coluna, color_col]
+            if style_col:
+                grouping_cols.append(style_col)
+
+            counts = df.groupby(grouping_cols).size().reset_index(name='total')
+            counts = counts.sort_values(coluna) # Ordenar para a linha fazer sentido
+
+            title = f"'{coluna}' com filtros: {', '.join(filter_cols)} {title_suffix}"
+
+            fig = px.line(
+                counts,
+                x=coluna,
+                y='total',
+                color=color_col,
+                line_dash=style_col,
+                title=title,
+                text='total'
+            )
+            fig.update_traces(textposition="top center")
+            return fig
+
+        # Histograma com múltiplos filtros
+        if tipo == "histogram" and len(filter_cols) > 0:
+            color_col = filter_cols[0]
+            title = f"'{coluna}' com filtro: {color_col} {title_suffix}"
+
+            fig = px.histogram(
+                df,
+                x=coluna,
+                color=color_col,
+                barmode='overlay',
+                title=title
+            )
+            fig.update_traces(opacity=0.75)
+            return fig
+
+        # Lógica original para outros tipos de gráfico
         ser = df[coluna].fillna("N/A").astype(str)
         counts = ser.value_counts().reset_index()
         counts.columns = ["categoria", "total"]
@@ -595,11 +709,10 @@ def api_grafico():
                 counts,
                 x="categoria",
                 y="total",
-                text="total",   # <<< mostra número na barra
+                text="total",
                 title=f"{coluna} {title_suffix}"
             )
             fig.update_traces(textposition="outside")
-
         elif tipo == "pie":
             fig = px.pie(
                 counts,
@@ -608,25 +721,22 @@ def api_grafico():
                 title=f"{coluna} {title_suffix}",
                 hole=0
             )
-            fig.update_traces(textinfo='label+percent+value')  # <<< mostra valores
-
+            fig.update_traces(textinfo='label+percent+value')
         elif tipo == "line":
             fig = px.line(
                 counts,
                 x="categoria",
                 y="total",
-                text="total",   # <<< mostra número
+                text="total",
                 title=f"{coluna} {title_suffix}"
             )
             fig.update_traces(textposition="top center")
-
         elif tipo == "histogram":
             fig = px.histogram(df, x=coluna, title=f"{coluna} {title_suffix}")
-
         else:
             fig = px.bar(counts, x="categoria", y="total", title=f"{coluna} {title_suffix}")
-
         return fig
+
     if tipo == "texto":
         # ----------------------------
         # RELATÓRIO POR EXTENSO BONITO
@@ -738,34 +848,44 @@ def api_grafico():
             fig2 = fig_from_df(sub2, title_suffix=f"- Comparador {title_post}")
             resultados.append({"title": f"Comparador — {compare_with} {title_post}", "fig": convert(fig2.to_plotly_json())})
 
-            # diferenças %
-            c1 = sub1[coluna].fillna("N/A").astype(str).value_counts()
-            c2 = sub2[coluna].fillna("N/A").astype(str).value_counts()
+            # Gráfico de Comparação de Totais Absolutos
+            filter_cols = [f_col for f_col in (filtros or {}).keys() if f_col in df1.columns and f_col in df2.columns and df1[f_col].nunique() > 1]
+            grouping_cols = [coluna] + filter_cols
 
-            categorias = sorted(set(c1.index.tolist() + c2.index.tolist()))
+            # Tratar coluna principal como string para consistência
+            sub1[coluna] = sub1[coluna].fillna("N/A").astype(str)
+            sub2[coluna] = sub2[coluna].fillna("N/A").astype(str)
 
-            diffs = []
-            for cat in categorias:
-                v1 = int(c1.get(cat, 0))
-                v2 = int(c2.get(cat, 0))
+            # Obter contagens para o dataframe base (sub1)
+            c1 = sub1.groupby(grouping_cols).size().reset_index(name='total')
+            c1['source'] = filename
 
-                if v1 == 0: pct = 100.0 if v2 > 0 else 0
-                else: pct = ((v2 - v1) / v1) * 100
+            # Obter contagens para o dataframe de comparação (sub2)
+            c2 = sub2.groupby(grouping_cols).size().reset_index(name='total')
+            c2['source'] = compare_with
 
-                diffs.append({"categoria": cat, "pct": round(pct, 2)})
+            # Combinar os dois dataframes para o gráfico
+            df_comp = pd.concat([c1, c2], ignore_index=True)
 
-            df_diff = pd.DataFrame(diffs)
+            # Aplicar o wrap de texto na coluna principal
+            df_comp[coluna] = df_comp[coluna].apply(wrap_labels)
 
-            fig_diff = px.bar(
-                df_diff,
-                x="categoria",
-                y="pct",
-                title=f"Variação % (Comparador vs Base) {title_post}",
-                text="pct"   # <-- RÓTULO DAS BARRAS
-            )
-            fig_diff.update_traces(textposition='outside')
+            # Gerar o gráfico de barras agrupado
+            if not df_comp.empty:
+                pattern_col = filter_cols[0] if filter_cols else None
 
-            resultados.append({"title": f"Variação % — {compare_with} vs {filename} {title_post}", "fig": convert(fig_diff.to_plotly_json())})
+                fig_comp = px.bar(
+                    df_comp,
+                    x=coluna,
+                    y='total',
+                    color='source',
+                    pattern_shape=pattern_col,
+                    barmode='group',
+                    title=f"Comparação de Totais {title_post}",
+                    text='total'
+                )
+                fig_comp.update_traces(textposition='outside')
+                resultados.append({"title": f"Comparação — {filename} vs {compare_with} {title_post}", "fig": convert(fig_comp.to_plotly_json())})
 
     return jsonify({"graficos": resultados})
 
