@@ -583,8 +583,30 @@ def api_grafico():
 
     # ---------------- MODO GRÁFICO A PARTIR DAQUI ----------------
 
+    def wrap_labels(val, length=20):
+        """Adiciona <br> em textos longos para quebra de linha no gráfico."""
+        if not isinstance(val, str) or len(val) <= length:
+            return val
+
+        # Quebra a string em palavras e reconstrói as linhas
+        words = val.split(' ')
+        lines = []
+        current_line = ""
+
+        for word in words:
+            if len(current_line + ' ' + word) > length:
+                lines.append(current_line)
+                current_line = word
+            else:
+                current_line += (' ' + word) if current_line else word
+
+        lines.append(current_line)
+        return '<br>'.join(lines)
+
     # função auxiliar: gerar figura de contagem por 'coluna'
     def fig_from_df(df, title_suffix=""):
+        df[coluna] = df[coluna].apply(wrap_labels)
+
         # Lógica para gráfico empilhado com múltiplos filtros
         if filtros and tipo == "bar":
             filter_cols = [f_col for f_col in filtros.keys() if f_col in df.columns]
@@ -826,45 +848,44 @@ def api_grafico():
             fig2 = fig_from_df(sub2, title_suffix=f"- Comparador {title_post}")
             resultados.append({"title": f"Comparador — {compare_with} {title_post}", "fig": convert(fig2.to_plotly_json())})
 
-            # Diferenças % com suporte a múltiplos filtros
-            filter_cols = [f_col for f_col in (filtros or {}).keys() if f_col in df1.columns and df1[f_col].nunique() > 1]
+            # Gráfico de Comparação de Totais Absolutos
+            filter_cols = [f_col for f_col in (filtros or {}).keys() if f_col in df1.columns and f_col in df2.columns and df1[f_col].nunique() > 1]
+            grouping_cols = [coluna] + filter_cols
 
-            # Se não houver filtros, usa a lógica original mais simples
-            if not filter_cols:
-                c1 = sub1[coluna].fillna("N/A").astype(str).value_counts()
-                c2 = sub2[coluna].fillna("N/A").astype(str).value_counts()
-                df_diff = pd.DataFrame({'total1': c1, 'total2': c2}).fillna(0).reset_index().rename(columns={'index': 'categoria'})
-            else:
-                # Com filtros, agrupa para obter contagens granulares
-                grouping_cols = [coluna] + filter_cols
-                c1 = sub1.groupby(grouping_cols).size().reset_index(name='total1')
-                c2 = sub2.groupby(grouping_cols).size().reset_index(name='total2')
-                df_diff = pd.merge(c1, c2, on=grouping_cols, how='outer').fillna(0)
+            # Tratar coluna principal como string para consistência
+            sub1[coluna] = sub1[coluna].fillna("N/A").astype(str)
+            sub2[coluna] = sub2[coluna].fillna("N/A").astype(str)
 
-            # Calcular a variação percentual
-            v1 = df_diff['total1']
-            v2 = df_diff['total2']
-            pct = np.where(v1 > 0, ((v2 - v1) / v1) * 100, np.where(v2 > 0, 100.0, 0))
-            df_diff['pct'] = np.round(pct, 2)
+            # Obter contagens para o dataframe base (sub1)
+            c1 = sub1.groupby(grouping_cols).size().reset_index(name='total')
+            c1['source'] = filename
 
-            # Gerar o gráfico de barras da variação percentual
-            if not df_diff.empty:
-                x_axis_col = 'categoria' if not filter_cols else coluna
-                color_col = filter_cols[0] if filter_cols else None
-                pattern_col = filter_cols[1] if len(filter_cols) > 1 else None
+            # Obter contagens para o dataframe de comparação (sub2)
+            c2 = sub2.groupby(grouping_cols).size().reset_index(name='total')
+            c2['source'] = compare_with
 
-                fig_diff = px.bar(
-                    df_diff,
-                    x=x_axis_col,
-                    y='pct',
-                    color=color_col,
+            # Combinar os dois dataframes para o gráfico
+            df_comp = pd.concat([c1, c2], ignore_index=True)
+
+            # Aplicar o wrap de texto na coluna principal
+            df_comp[coluna] = df_comp[coluna].apply(wrap_labels)
+
+            # Gerar o gráfico de barras agrupado
+            if not df_comp.empty:
+                pattern_col = filter_cols[0] if filter_cols else None
+
+                fig_comp = px.bar(
+                    df_comp,
+                    x=coluna,
+                    y='total',
+                    color='source',
                     pattern_shape=pattern_col,
-                    barmode='group' if filter_cols else 'relative',
-                    title=f"Variação % (Comparador vs Base) {title_post}",
-                    text='pct'
+                    barmode='group',
+                    title=f"Comparação de Totais {title_post}",
+                    text='total'
                 )
-                fig_diff.update_traces(textposition='outside')
-                resultados.append({"title": f"Variação % — {compare_with} vs {filename} {title_post}", "fig": convert(fig_diff.to_plotly_json())})
+                fig_comp.update_traces(textposition='outside')
+                resultados.append({"title": f"Comparação — {filename} vs {compare_with} {title_post}", "fig": convert(fig_comp.to_plotly_json())})
 
     return jsonify({"graficos": resultados})
 
